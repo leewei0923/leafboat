@@ -1,0 +1,744 @@
+<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><title>满和星</title><description>微微风簇浪，散作满河星。</description><link>https://astro-blog-zozo.pages.dev/</link><item><title>read the super tiny compiler code</title><link>https://astro-blog-zozo.pages.dev/posts/read-the-super-tiny-compiler-code-2024-04-02/</link><guid isPermaLink="true">https://astro-blog-zozo.pages.dev/posts/read-the-super-tiny-compiler-code-2024-04-02/</guid><pubDate>Wed, 15 May 2024 15:48:09 GMT</pubDate><content:encoded>
+
+
+今天看到这个star个数超多的，尝试读一读这个源码，也试试去了解。
+
+开始读源码前，要先看下这个注释的。带有这个注释，这个代码量是不止200行的。注释写的很详细。
+
+它的一个主要功能是用来将`Lisp`风格的代码，转换成`C`风格的代码。
+
+
+
+
+
+```js
+// 该程序包含这几个方法函数
+tokenizer, // 词法解析函数
+    
+parser, // 解析器
+    
+traverser,
+    
+transformer,
+    
+codeGenerator,
+    
+compiler,
+```
+
+## tokenizer
+
+该函数是一个词法分析器，用于将输入的字符串分解成一系列的（tokens）,方便后续的处理。
+
+将输入的字符串按照以下四个规则分解成以下几种类型。
+
+```js
+function tokenizer(input) {
+  let current = 0;
+  let tokens = [];
+  while (current &lt; input.length) {
+    let char = input[current];
+     
+    // 1.括号：开括号“（”和闭括号“）”
+    if (char === &apos;(&apos;) {
+      tokens.push({
+        type: &apos;paren&apos;,
+        value: &apos;(&apos;,
+      });
+      current++;
+      continue;
+    }
+
+    if (char === &apos;)&apos;) {
+      tokens.push({
+        type: &apos;paren&apos;,
+        value: &apos;)&apos;,
+      });
+      current++;
+      continue;
+    }
+     2.忽略空白字符串 
+
+    let WHITESPACE = /\s/;
+    if (WHITESPACE.test(char)) {
+      current++;
+      continue;
+    }
+
+    3. 这里用来获取连续的数字字符，连续的数字字符构成数字token
+    let NUMBERS = /[0-9]/;
+    if (NUMBERS.test(char)) {
+
+      let value = &apos;&apos;;
+
+      while (NUMBERS.test(char)) {
+        value += char;
+        char = input[++current];
+      }
+
+      tokens.push({ type: &apos;number&apos;, value });
+
+      continue;
+    }
+
+    4.获取被双引号包裹的文本内容，被标记为string类型值为字符串内容
+    if (char === &apos;&quot;&apos;) {
+      let value = &apos;&apos;;
+      char = input[++current];
+      while (char !== &apos;&quot;&apos;) {
+        value += char;
+        char = input[++current];
+      }
+      char = input[++current];
+      tokens.push({ type: &apos;string&apos;, value });
+      continue;
+    }
+
+    5.用来获取连续的字符，然后标记为函数名
+    let LETTERS = /[a-z]/i;
+    if (LETTERS.test(char)) {
+      let value = &apos;&apos;;
+      while (LETTERS.test(char)) {
+        value += char;
+        char = input[++current];
+      }
+      tokens.push({ type: &apos;name&apos;, value });
+      continue;
+    }
+    throw new TypeError(&apos;I dont know what this character is: &apos; + char);
+  }
+  return tokens;
+}
+```
+
+
+
+## parser
+
+这里parser的功能就是用来转换成抽象语法树（AST）
+
+```js
+let ast = {
+    type: &apos;Program&apos;,
+    body: [],
+  };
+// 这是初始值
+```
+
+在该`parser`中，最重要的是`walk`这个函数，它的作用是遍历`tokenizer`生成的`tokens`。
+
+定义了
+
+- NumberLiteral
+- StringLiteral
+- CallExpression
+
+这三种类型
+
+使用递归来处理嵌套的调用表达式
+
+```js
+if (
+      token.type === &apos;paren&apos; &amp;&amp;
+      token.value === &apos;(&apos;
+    ) {
+      token = tokens[++current];
+      let node = {
+        type: &apos;CallExpression&apos;,
+        name: token.value,
+        params: [],
+      };
+      token = tokens[++current];
+      while (
+        (token.type !== &apos;paren&apos;) ||
+        (token.type === &apos;paren&apos; &amp;&amp; token.value !== &apos;)&apos;)
+      ) {
+        node.params.push(walk());
+        token = tokens[current];
+      }
+      current++;
+      return node;
+    }
+```
+
+以上代码我不太理解这段
+
+```js
+ while (
+        (token.type !== &apos;paren&apos;) ||
+        (token.type === &apos;paren&apos; &amp;&amp; token.value !== &apos;)&apos;)
+      ) {
+        node.params.push(walk());
+        token = tokens[current];
+      }
+```
+
+这部分是一个逻辑表达式，用于判断是否继续循环解析函数参数。让我们分解一下：
+
+1. `(token.type !== &apos;paren&apos;)`: 这部分检查当前 token 的类型是否不是 &apos;paren&apos;。如果不是 &apos;paren&apos;，则意味着我们尚未到达函数参数列表的结束括号 &apos;)&apos;，因此需要继续解析参数。这样做是为了处理可能的函数嵌套以及其他可能的语法结构。
+2. `||`：这是逻辑或运算符，意味着只要两者中有一个条件为真，整个表达式就为真。
+3. `(token.type === &apos;paren&apos; &amp;&amp; token.value !== &apos;)&apos;)`: 这部分检查当前 token 的类型是否是 &apos;paren&apos; 且其值不等于 &apos;)&apos;。这意味着当前 token 是一个左括号 &apos;(&apos;，而不是右括号 &apos;)&apos;，因此函数参数列表尚未结束，需要继续解析参数。
+
+来源：chatgpt
+
+```js
+function parser(tokens) {
+  let current = 0;
+
+  function walk() {
+
+    let token = tokens[current];
+    if (token.type === &apos;number&apos;) {
+      current++;
+
+      return {
+        type: &apos;NumberLiteral&apos;,
+        value: token.value,
+      };
+    }
+
+    if (token.type === &apos;string&apos;) {
+      current++;
+
+      return {
+        type: &apos;StringLiteral&apos;,
+        value: token.value,
+      };
+    }
+
+    if (
+      token.type === &apos;paren&apos; &amp;&amp;
+      token.value === &apos;(&apos;
+    ) {
+
+      token = tokens[++current];
+
+      let node = {
+        type: &apos;CallExpression&apos;,
+        name: token.value,
+        params: [],
+      };
+      token = tokens[++current];
+      while (
+        (token.type !== &apos;paren&apos;) ||
+        (token.type === &apos;paren&apos; &amp;&amp; token.value !== &apos;)&apos;)
+      ) {
+        node.params.push(walk());
+        token = tokens[current];
+      }
+      current++;
+      return node;
+    }
+    throw new TypeError(token.type);
+  }
+  let ast = {
+    type: &apos;Program&apos;,
+    body: [],
+  };
+  while (current &lt; tokens.length) {
+    ast.body.push(walk());
+  }
+  return ast;
+}
+```
+
+
+
+
+
+## traverser
+
+`traverser`用来访问AST
+
+内部定义了`traverseArray`和`traverseNode`两个函数。
+
+1. `traverseArray` 函数用于遍历一个节点数组，并对数组中的每个节点调用 `traverseNode` 函数。
+
+```js
+  function traverseArray(array, parent) {
+    array.forEach(child =&gt; {
+      traverseNode(child, parent);
+    });
+  }
+```
+
+
+
+2. `traverseNode` 函数是实际的遍历函数。它接受两个参数：`node`（当前要遍历的节点）和 `parent`（该节点的父节点）
+
+```js
+  // traverseNode 函数是实际的遍历函数。它接受两个参数：node（当前要遍历的节点）和 parent（该节点的父节点）。
+function traverseNode(node, parent) {
+    // 首先，它检查 visitor 对象中是否存在当前节点类型 node.type 对应的方法集合 methods。
+    let methods = visitor[node.type];
+
+    // 如果存在 methods，并且其中包含 enter 方法，那么调用 enter 方法，并传入当前节点 node 和其父节点 parent。
+    if (methods &amp;&amp; methods.enter) {
+      methods.enter(node, parent);
+    }
+  
+    // 使用 switch 语句根据当前节点的类型进行不同的处理：
+    switch (node.type) {
+   // 如果节点类型是 &apos;Program&apos;，则遍历其 body 属性中的子节点数组。
+      case &apos;Program&apos;:
+        traverseArray(node.body, node);
+        break;
+   // 如果节点类型是 &apos;CallExpression&apos;，则遍历其 params 属性中的子节点数组。          
+      case &apos;CallExpression&apos;:
+        traverseArray(node.params, node);
+        break;
+   // 如果节点类型是 &apos;NumberLiteral&apos; 或 &apos;StringLiteral&apos;，则不执行任何操作。            
+      case &apos;NumberLiteral&apos;:
+   
+   // 如果节点类型不在上述列举的类型中，则抛出 TypeError，表示不支持的节点类型。
+      case &apos;StringLiteral&apos;:
+        break;
+      default:
+        throw new TypeError(node.type);
+    }
+    // 如果存在 methods，并且其中包含 exit 方法，那么在处理完当前节点后，调用 exit 方法，并传入当前节点 node 和其父节点 parent。
+    if (methods &amp;&amp; methods.exit) {
+    // 最后，调用 traverseNode 函数，传入 AST 的根节点 ast 和 null，表示根节点没有父节点。
+      methods.exit(node, parent);
+    }
+  }
+```
+
+
+
+**traverser总览**
+
+```js
+function traverser(ast, visitor) { 
+  function traverseArray(array, parent) {
+    array.forEach(child =&gt; {
+      traverseNode(child, parent);
+    });
+  }
+
+  function traverseNode(node, parent) {
+
+    let methods = visitor[node.type];
+
+    if (methods &amp;&amp; methods.enter) {
+      methods.enter(node, parent);
+    }
+    switch (node.type) {
+      case &apos;Program&apos;:
+        traverseArray(node.body, node);
+        break;
+            
+      case &apos;CallExpression&apos;:
+        traverseArray(node.params, node);
+        break;
+            
+      case &apos;NumberLiteral&apos;:
+            
+      case &apos;StringLiteral&apos;:
+        break;
+      default:
+        throw new TypeError(node.type);
+    }
+    if (methods &amp;&amp; methods.exit) {
+      methods.exit(node, parent);
+    }
+  }
+  traverseNode(ast, null);
+}
+
+```
+
+
+
+
+
+
+
+## transformer
+
+这段代码是一个 AST 转换器 `transformer` 函数，它接受一个 AST（抽象语法树）作为输入，并返回一个经过转换后的新 AST。
+
+1. 在 `transformer` 函数内部，首先创建了一个新的 AST 对象 `newAst`，它具有类型 `&apos;Program&apos;`，并且没有任何节点，即 `body` 属性是一个空数组。
+
+```js
+let newAst = {
+    type: &apos;Program&apos;,
+    body: [],
+  };
+```
+
+2. 接着，将原始的 AST 的 `_context` 属性设置为新 AST 的 `body` 属性。这样做是为了在遍历原始 AST 的过程中，能够方便地向新 AST 中添加节点。
+
+```js
+ast._context = newAst.body;
+```
+
+3. 调用 `traverser` 函数遍历原始 AST，同时传入了一个对象作为第二个参数，这个对象包含了对不同类型节点的处理方法。
+
+```js
+traverser(ast, {
+    // 对于 &apos;NumberLiteral&apos; 和 &apos;StringLiteral&apos; 类型的节点，分别定义了处理方法。这些处理方法会在遍历到相应节点时被调用，将相应类型的节点转换成新的节点并添加到新的 AST 中。
+    NumberLiteral: {
+      enter(node, parent) {
+        parent._context.push({
+          type: &apos;NumberLiteral&apos;,
+          value: node.value,
+        });
+      },
+    },
+    // 对于 &apos;CallExpression&apos; 类型的节点，定义了另外一个处理方法。在进入 &apos;CallExpression&apos; 节点时，会创建一个新的表达式对象 expression，并设置它的类型为 &apos;CallExpression&apos;，设置 callee 属性为一个标识符对象，表示函数名，然后初始化 arguments 属性为一个空数组，用于存储函数参数。
+    StringLiteral: {
+      enter(node, parent) {
+        parent._context.push({
+          type: &apos;StringLiteral&apos;,
+          value: node.value,
+        });
+      },
+    },
+    // 如果当前节点的父节点不是 &apos;CallExpression&apos;，那么将新创建的 expression 对象包装成一个 &apos;ExpressionStatement&apos; 节点。这是因为在语法树中，函数调用可能出现在语句的上下文中，所以需要进行适当的调整。
+    CallExpression: {
+      enter(node, parent) {
+        let expression = {
+          type: &apos;CallExpression&apos;,
+          callee: {
+            type: &apos;Identifier&apos;,
+            name: node.name,
+          },
+          arguments: [],
+        };
+        node._context = expression.arguments;
+        if (parent.type !== &apos;CallExpression&apos;) {
+          expression = {
+            type: &apos;ExpressionStatement&apos;,
+            expression: expression,
+          };
+        }
+      // 最后，在处理完当前节点后，将新创建的表达式对象添加到父节点的 _context 中。
+        parent._context.push(expression);
+      },
+    }
+  });
+```
+
+
+
+**代码总览**
+
+```js
+function transformer(ast) {
+  let newAst = {
+    type: &apos;Program&apos;,
+    body: [],
+  };
+  ast._context = newAst.body;
+  traverser(ast, {
+    NumberLiteral: {
+      enter(node, parent) {
+        parent._context.push({
+          type: &apos;NumberLiteral&apos;,
+          value: node.value,
+        });
+      },
+    },
+    StringLiteral: {
+      enter(node, parent) {
+        parent._context.push({
+          type: &apos;StringLiteral&apos;,
+          value: node.value,
+        });
+      },
+    },
+    CallExpression: {
+      enter(node, parent) {
+        let expression = {
+          type: &apos;CallExpression&apos;,
+          callee: {
+            type: &apos;Identifier&apos;,
+            name: node.name,
+          },
+          arguments: [],
+        };
+        node._context = expression.arguments;
+        if (parent.type !== &apos;CallExpression&apos;) {
+          expression = {
+            type: &apos;ExpressionStatement&apos;,
+            expression: expression,
+          };
+        }
+        parent._context.push(expression);
+      },
+    }
+  });
+  return newAst;
+}
+
+```
+
+
+
+## codeGenerator
+
+这段代码是一个用于生成代码的函数 `codeGenerator`，它接受一个 AST 节点作为输入，并返回相应的代码字符串。
+
+```js
+function codeGenerator(node) {
+  switch (node.type) {
+    // 如果节点类型是 &apos;Program&apos;，则遍历 body 数组中的每个子节点，并对每个子节点递归调用 codeGenerator 函数，然后使用 join(&apos;\n&apos;) 将所有生成的代码字符串连接起来，并以换行符分隔。
+    case &apos;Program&apos;:
+      return node.body.map(codeGenerator)
+        .join(&apos;\n&apos;);
+          
+	// 如果节点类型是 &apos;ExpressionStatement&apos;，则递归调用 codeGenerator 函数生成表达式的代码字符串，并在最后加上一个分号。
+    case &apos;ExpressionStatement&apos;:
+      return (
+        codeGenerator(node.expression) +
+        &apos;;&apos; // &lt;&lt; (...because we like to code the *correct* way)
+      );
+
+    // 如果节点类型是 &apos;CallExpression&apos;，则生成调用表达式的代码字符串。首先生成调用函数的代码字符串，然后在括号内生成参数的代码字符串，参数之间用逗号分隔。
+    case &apos;CallExpression&apos;:
+      return (
+        codeGenerator(node.callee) +
+        &apos;(&apos; +
+        node.arguments.map(codeGenerator)
+          .join(&apos;, &apos;) +
+        &apos;)&apos;
+      );
+	// 如果节点类型是 &apos;Identifier&apos;，则直接返回标识符的名称。
+    case &apos;Identifier&apos;:
+      return node.name;
+
+   // 如果节点类型是 &apos;NumberLiteral&apos;，则直接返回数值字面量的值。
+    case &apos;NumberLiteral&apos;:
+      return node.value;
+   
+   // 如果节点类型是 &apos;StringLiteral&apos;，则返回带有双引号的字符串字面量。
+    case &apos;StringLiteral&apos;:
+      return &apos;&quot;&apos; + node.value + &apos;&quot;&apos;;
+   // 如果节点类型不是以上任何一种，则抛出 TypeError。
+    default:
+      throw new TypeError(node.type);
+  }
+}
+```
+
+
+
+## compiler
+
+下面代码的作用是将输入的字符串经过词法分析、语法分析、转换和代码生成等步骤之后，返回一个编译后的代码字符串。
+
+```js
+function compiler(input) {
+  // tokenizer(input): 调用 tokenizer 函数对输入的字符串进行词法分析，将其分解成一个个的标记（tokens）。
+  let tokens = tokenizer(input);
+    
+  // parser(tokens): 将词法分析得到的标记数组作为输入，调用 parser 函数对这些标记进行语法分析，构建出对应的抽象语法树（AST）。
+  let ast    = parser(tokens);
+   
+ // transformer(ast): 将语法分析得到的抽象语法树作为输入，调用 transformer 函数进行转换，生成一个新的经过处理的 AST。
+  let newAst = transformer(ast);
+ 
+ // codeGenerator(newAst): 将经过转换后的新 AST 作为输入，调用 codeGenerator 函数生成对应的代码字符串。
+  let output = codeGenerator(newAst);
+  // and simply return the output!
+  return output;
+}
+```
+
+</content:encoded></item><item><title>handling code commit conflicts</title><link>https://astro-blog-zozo.pages.dev/posts/handling-code-commit-conflicts-2024-02-25/</link><guid isPermaLink="true">https://astro-blog-zozo.pages.dev/posts/handling-code-commit-conflicts-2024-02-25/</guid><description>处理代码提交冲突，远程和本地记录不一致</description><pubDate>Wed, 15 May 2024 15:48:00 GMT</pubDate><content:encoded>
+## 问题一：远程与本地记录不一致
+
+我在web上直接点击创建仓库，当时生成默认的文件。后续在本地添加远程分支的时候，提示我没有提交记录无法保存。现在已经解决了问题。
+
+- 本地添加远程记录
+
+```shell
+git remote add origin https://xxx.git
+```
+
+- 强制提交
+
+```shell
+git push -u origin main
+```
+
+- 若是提示没有历史记录(可以先忽略历史提交)
+
+适合合并远程 `main` 分支的历史记录到当前分支，并且允许合并两者之间没有共同历史记录的情况
+
+```shell
+git merge origin/main --allow-unrelated-histories
+```
+
+- 删除分支
+
+```shell
+// 删除本地分支
+git branch -d localBranchName
+
+// 删除远程分支
+git push origin --delete remoteBranchName
+```
+
+</content:encoded></item><item><title>谈谈半日常州行</title><link>https://astro-blog-zozo.pages.dev/posts/%E8%B0%88%E8%B0%88%E5%8D%8A%E6%97%A5%E5%B8%B8%E5%B7%9E%E8%A1%8C-2024-04-20/</link><guid isPermaLink="true">https://astro-blog-zozo.pages.dev/posts/%E8%B0%88%E8%B0%88%E5%8D%8A%E6%97%A5%E5%B8%B8%E5%B7%9E%E8%A1%8C-2024-04-20/</guid><description>走过一些小地方，聊聊感受</description><pubDate>Wed, 15 May 2024 15:47:38 GMT</pubDate><content:encoded>
+今天中午的时候，突然想去
+</content:encoded></item><item><title>css生成呼吸效果</title><link>https://astro-blog-zozo.pages.dev/posts/css%E7%94%9F%E6%88%90%E5%91%BC%E5%90%B8%E6%95%88%E6%9E%9C/</link><guid isPermaLink="true">https://astro-blog-zozo.pages.dev/posts/css%E7%94%9F%E6%88%90%E5%91%BC%E5%90%B8%E6%95%88%E6%9E%9C/</guid><pubDate>Wed, 15 May 2024 00:00:00 GMT</pubDate><content:encoded>
+
+
+&lt;h2 *class*=&quot;text-center text-[#262626] text-2xl font-bold&quot;&gt;满河星✨BLOG&lt;/h2&gt;
+
+
+&lt;style&gt;
+    .circle-breath {
+    	animation: circle-breath-animation 2.4s infinite;
+    	width: 40px;
+    	height: 40px;
+    	background: rgb(214, 0, 26);
+    	border-radius: 50%;
+    }
+    @keyframes circle-breath-animation {
+    	0% {
+    		box-shadow: 0 0 0 0 rgba(214, 0, 26, 100%);
+    	}
+    	60% {
+    		box-shadow: 0 0 0 25px rgba(214, 0, 26, 0%);
+    	}
+    	100% {
+    		box-shadow: 0 0 0 0 rgba(214, 0, 26, 0%);
+    	}
+    }
+    &lt;/style&gt;
+&lt;div class=&quot;circle-breath&quot;&gt;&lt;/div&gt;
+
+
+
+
+```html
+
+&lt;style&gt;
+    .circle-breath {
+    	animation: circle-breath-animation 2.4s infinite;
+    	width: 40px;
+    	height: 40px;
+    	background: rgb(214, 0, 26);
+    	border-radius: 50%;
+    }
+    @keyframes circle-breath-animation {
+    	0% {
+    		box-shadow: 0 0 0 0 rgba(214, 0, 26, 100%);
+    	}
+    	60% {
+    		box-shadow: 0 0 0 25px rgba(214, 0, 26, 0%);
+    	}
+    	100% {
+    		box-shadow: 0 0 0 0 rgba(214, 0, 26, 0%);
+    	}
+    }
+    &lt;/style&gt;
+&lt;div class=&quot;circle-breath&quot;&gt;&lt;/div&gt;
+
+```
+
+
+
+以上代码中，关键的是`circle-breath-animation`这个
+
+```css
+0% {	box-shadow: 0 0 0 0 rgba(214, 0, 26, 100%);	}
+```
+
+- `0% { box-shadow: 0 0 0 0 rgba(214, 0, 26, 100%); }` 定义动画的起始状态，在动画的 0% 时刻，`box-shadow` 属性设置为 0 像素扩散，颜色为不透明的红色。
+
+```css
+60% {	box-shadow: 0 0 0 25px rgba(214, 0, 26, 0%);	}
+```
+
+- `60% { box-shadow: 0 0 0 25px rgba(214, 0, 26, 0%); }` 在动画进行到 60% 时，`box-shadow` 属性扩散到 25 像素，颜色变为完全透明的红色。
+
+```css
+100% {	box-shadow: 0 0 0 0 rgba(214, 0, 26, 0%);	}
+```
+
+- `100% { box-shadow: 0 0 0 0 rgba(214, 0, 26, 0%); }` 在动画结束时（即 100% 时刻），`box-shadow` 属性又恢复到初始状态，即 0 像素扩散，颜色完全透明。
+
+
+
+- 通过 `box-shadow` 动画效果，这个圆形会周期性地出现扩散和消失的效果，类似于呼吸时的起伏。
+- 动画从没有阴影开始，然后在 2.4 秒内阴影逐渐扩散到 25 像素，再回到没有阴影的状态，形成循环的呼吸效果。</content:encoded></item><item><title>阅读谷歌十戒（十大信条）</title><link>https://astro-blog-zozo.pages.dev/posts/%E9%98%85%E8%AF%BB%E8%B0%B7%E6%AD%8C%E5%8D%81%E6%88%92%EF%BC%88%E5%8D%81%E5%A4%A7%E4%BF%A1%E6%9D%A1%EF%BC%89/</link><guid isPermaLink="true">https://astro-blog-zozo.pages.dev/posts/%E9%98%85%E8%AF%BB%E8%B0%B7%E6%AD%8C%E5%8D%81%E6%88%92%EF%BC%88%E5%8D%81%E5%A4%A7%E4%BF%A1%E6%9D%A1%EF%BC%89/</guid><description>互联网其实不是技术，而是一种观念，是一种方法论，抓住这种方法论就能把握住互联网的精髓。</description><pubDate>Sun, 12 May 2024 00:00:00 GMT</pubDate><content:encoded>
+
+
+阅读《小米创业思考》这本书，我收获了“谷歌十戒”。
+
+以下是谷歌十戒内容，值得熟读背诵。
+
+**1. 一切以用户为中心,其他一切纷至沓来 Focus on the user and all else will follow.**
+
+自创建伊始，Google 就一直以提供尽可能出色的用户体验为宗旨。 无论是设计全新的互联网浏览器，还是对首页外观进行新调整，我们都非常用心地确保最终的结果能够很好地满足用户需求，而不是为了实现公司自身的内部目标或经济利益。我们的首页界面简单明了，网页加载速度非常快。我们从不出售搜索结果中的排名。对于广告，我们会清楚地将它们如实标记出来，而且广告内容也会与搜索相关，以确保广告不会分散用户的注意力。在开发新的工具和应用时，我们都会努力做到尽善尽美，尽可能让用户一眼就认同我们的设计，而不会再作他想。
+
+**2. 把一件事做到极致. It’s best to do one thing really, really well.**
+
+Google 以搜索起家，而搜索也一直是我们的核心业务。我们拥有世界上最大的研究团队之一，可以心无旁骛地攻克搜索方面的难题，我们知道自己擅长什么，也知道如何可以做得更好。 由于要不断应对各种棘手状况，Google 已深谙复杂难题的解决之道。我们的服务已让千百万用户能够方便快捷地找到所需信息，但我们不断探索、追求更高境界的脚步不会停歇。我们为不断地改进搜索服务所做的投入，也有助于我们将掌握到的知识和技术应用于 Gmail 和 Google 地图等新产品。我们希望将搜索所蕴含的无限力量应用于未曾探索过的领域，并帮助用户在生活中更多地获取和使用越来越丰富的信息。
+
+**3. 快比慢好. Fast is better than slow.**
+
+我们很清楚，您的时间非常宝贵，因此，当在网络上寻找某个问题的答案时，您一定希望瞬间就能找到，而我们的目标就是满足您的这些需求。我们的目标是让用户尽快离开我们的网站 - 世界上大概只有 Google 能这么说。我们不断精简网页并提高服务环境的效率，一次次地打破自己创造的速度纪录，现在的搜索结果响应时间平均只有几分之一秒。我们推出的每款新产品都非常注重速度，无论是移动应用，还是 Google Chrome（一款可快速加载新型网页的浏览器），都是如此。我们将继续努力提高所有产品的运行速度。
+
+**4. 网络社会需要民主. Democracy on the web works.**
+
+Google 搜索之所以能快速找到相关信息，有赖于数百万在网站上发布链接的用户，是他们帮助我们判断哪些其他网站提供了有价值的内容。在评估每个网页的重要性时，我们采用了 200 多种信号以及大量的技术，其中包括我们的专利算法 PageRank™，它可以分析出哪些网站被网络中的其他网页“票选”为最佳信息来源。随着网络规模的扩大，这种方法实际上也会越来越完善，因为每个新网站在提供信息的同时，也是另一张待统计的“选票”。秉承同样的民主精神，我们积极从事开源软件的开发，集众多编程人员的努力和创意，不断推出各种创新产品。
+
+**5. 您不一定要在桌子前找答案. You don’t need to be at your desk to need an answer.**
+
+现在，人们越来越多地使用移动设备，因为他们希望随时随地获得所需的信息。为此，我们正不断开发新技术，推出新的移动服务解决方案，以帮助全球用户通过手机处理各种事务：从查看电子邮件和日历活动到观看视频，不一而足。至于在手机上通过多种不同的方式使用 Google 搜索功能，那就更不在话下了。此外，我们希望通过 Android 激发更强的创新意识，为全球移动用户谋福利。Android 是一个免费的开源移动平台，它将开放性这一让互联网大获成功的因素带入了移动世界。Android 不仅能使消费者受益，让他们拥有更多选择余地，享受更富创意的移动体验，也为运营商、制造商和开发者创造了营收机会。
+
+**6. 不做坏事也能赚钱. You can make money without doing evil.**
+
+作为一家公司，Google 有两个收入来源：一是向其他公司提供搜索技术，另一个则是向广告主提供在我们的网站上和网络中的其他网站上投放广告的服务。全球有数十万的广告主使用 Google Ads 推广他们的产品，还有数十万的发布商通过 AdSense 计划投放与自己网站内容相关的广告。为了确保最终能够服务所有用户（无论他们是不是广告主），我们针对我们的广告计划和实践做法制定了一系列指导原则：
+
+- 除非广告内容与搜索结果页的内容相关，否则，就不能出现在我们的搜索结果页上。我们坚信，只有广告与您要查找的内容相关时，它提供的信息对您来说才算有用。因此，您可能会发现，执行某些搜索后看不到任何广告。
+- 我们相信，广告即使不“喧哗夺宠”也能取得出色效果。所以，我们拒绝弹出式广告，因为这种广告会妨碍用户浏览要找的内容。我们还发现，如果文字广告与受众相关，则点击率就会远远高于随机显示的广告。所有广告主（无论规模大小）都可从这种针对性极强的广告媒介中受益。
+- 在 Google 上投放的广告总是明确地标记为“赞助商链接”，因此，这些广告不会影响搜索结果的真实性。我们绝不会通过操纵排名来将我们的合作伙伴放在搜索结果中排名靠前的位置，而且任何人都无法购得更高的 PageRank。我们的用户信任 Google 的客观性，我们绝不会为任何短期利益去破坏这份信任。
+
+**7. 未知的信息总是存在的. There’s always more information out there.**
+
+当 Google 索引中的互联网 HTML 网页数量超过其他任何搜索服务时，我们的工程师便将精力转到那些不那么唾手可得的信息上。有时我们只需将新的数据库集成到搜索中即可（例如添加电话号码和地址查询、添加商家目录），但有时，却需要发挥一些聪明才智，例如扩大搜索的范围，将新闻存档、专利、学术期刊以及数十亿张图片和数百万本书籍全都纳入到搜索范围内。我们的研究人员会继续研究如何将世界上所有的信息提供给有需要的人们。
+
+**8. 对信息的需求无所不在. The need for information crosses all borders.**
+
+我们的公司是在美国加利福尼亚州成立的，但我们的目标是帮助全世界使用各种语言的人获取信息。为此，我们在 60 多个国家/地区设立了办事处，拥有 180 多个互联网域名，我们为生活在美国境外的用户提供的搜索结果量占总搜索结果量的一半还多。我们提供 130 多种语言的 Google 搜索界面，能让用户将搜索结果限定为以他们自己的语言撰写的内容；对于 Google 的其他应用和产品，我们也希望推出尽可能多的语言版本和可使用的形式。有了我们的翻译工具，哪怕内容是用地球另一端您完全不懂的语言所撰写的，您也可以浏览和探索。在这些工具和志愿译者的帮助下，我们甚至能够大幅改进向世界上最偏远地区的用户提供的服务的种类和质量。
+
+**9. 不穿西装也可以严肃认真. You can be serious without a suit.**
+
+我们的创始人秉承着“工作要有挑战，挑战带来快乐”的理念创立了 Google。我们相信，恰当的企业文化更容易孵化出绝妙的、富有创意的产品。这样的企业文化绝不是熔岩灯和橡胶球就能营造出来的。我们重视团队成绩，也推崇个人成就，因为这都是公司全面成功的基础。员工是企业的宝贵资产，我们极为重视。他们背景不同，但都活力四射、热情洋溢。无论是工作、娱乐还是生活，他们总是充满创意。我们的工作氛围可能非常随意，但就是在排队等咖啡的过程中、在小组会议上或在健身房中，新的想法不断涌现，并以令人目眩的速度完成讨论、测试及付诸实现的流程 - 不经意间，没准一个令世人称道的新项目就此诞生了。
+
+**10. 仅有优秀是远远不够的. Great just isn’t good enough.**
+
+我们始终将自己在某方面的优势视为继续发展的起点，而不是终点。我们目标远大，因为我们知道，只有不断朝着这些目标努力，才能超越预期，走得更远。对于任何产品和服务，Google 都会通过创新和不断推陈出新，以超出想象的方式加以完善，令其好上加好。例如，我们的一位工程师发现，用拼写正确的字词进行搜索时得到的结果更准确，于是他就开始思考应当如何处理错别字，最后他开发出了一种直观且更加实用的拼写检查工具。
+
+即使您也不太清楚自己要查找的确切内容，在网络上寻找答案也不是您的问题，而是要由我们来解决的问题。我们会在全球受众尚不清楚自己的需求时，尽量先行预测出他们的需求，并开发出日后可能会成为新标杆的产品和服务来满足这些需求。 以我们发布 Gmail 时的情况为例，与当时的其他电子邮件服务相比，Gmail 拥有的存储空间更大。 虽然现在去看这似乎不算什么，但别忘了，这是因为如今的邮箱存储空间标准已大不相同。这些都是我们所寻求的改变，我们会一直探索能够推动改变的新领域。归根结底，我们所做的一切正是源于永不满足于现状的奋进精神。
+</content:encoded></item><item><title>to chen qian</title><link>https://astro-blog-zozo.pages.dev/posts/to-chen-qian-2024-04-10/</link><guid isPermaLink="true">https://astro-blog-zozo.pages.dev/posts/to-chen-qian-2024-04-10/</guid><description>今日我想对你说</description><pubDate>Sat, 04 May 2024 08:37:17 GMT</pubDate><content:encoded>
+陈倩，你好！有太多的话，不想通过微信去说。只好通过书信的方式，表达我内心的想法。我知道这改变不了事实，烦请耐心看下去。认识你，截止到我写完此封，才短短11天。期间，我们并没有交谈太多，我对你了解甚少，我是怀着交朋友的态度的。我向来对人是一向热忱，因为是家里介绍的人，自会更甚一些。感谢这些天，听我给你分享的内容，满足我的分享欲望。除了工作外，与人交谈不多，这几日，心里一直想着找你聊天。
+
+我是3月30日加上你的微信的，被介绍认识人，开局一个微信号。其实和陌生交友没多大区别。但其实这种交友，效率蛮低的，一方或者双方意愿都不强，完全是靠家长强推。男方一般就主攻，女方主守。尖锐的矛，与坚固的盾相对。对于我而言，心有冷了一下，那几日热忱的心不再，原本计划的，世界围绕你来转的，整日沉浸在将来谈恋爱的场景下。真的是激动的心，颤抖的手啊。夜里激动的睡不着觉。看着大话西游的解说，心里暗自嘲笑至尊宝：你看我，我也会有女朋友了，嘿嘿，你就好好取经吧。幸好这样的大梦，没有彻夜常做。沉浸在幻想的世界，有时候会忘记了时间，忘记了自己。
+
+这几日，我一直试图通过我的兴趣点，去碰撞出你的兴趣点，求同。很遗憾的是，我从你那里我得不到任何的消息，基本上，不太了解你，并没有提供给我很多的信息。我了解到你喜欢凤凰传奇，你也喜欢听歌，也爱与人分享，很钦佩周恩来总理。其他的我没有察觉到什么了。反正，我喜欢滔滔不绝的和你说，有时候，发很长一段的话给你。我都是真心相对，都是我内心的想法，但是现在比以前果断多了，想到什么，就直接发，这是我改变的一点。
+
+从你的态度上看，却是不太愿意。从今日的谈话来看，的确也是。我完全尊重你的想法。
+
+祝你工作顺利，事事顺心吧！我继续众里寻他千百度！
+</content:encoded></item><item><title>the start of 2024</title><link>https://astro-blog-zozo.pages.dev/posts/the-start-of-2024-2024-01-01/</link><guid isPermaLink="true">https://astro-blog-zozo.pages.dev/posts/the-start-of-2024-2024-01-01/</guid><description>happy new year</description><pubDate>Fri, 03 May 2024 15:15:18 GMT</pubDate><content:encoded>
+Hello leewei! 
+
+Today is the first day of 2024. That&apos;s crazy in the last night. 
+</content:encoded></item><item><title>一个想法的诞生</title><link>https://astro-blog-zozo.pages.dev/posts/%E4%B8%80%E4%B8%AA%E6%83%B3%E6%B3%95%E7%9A%84%E8%AF%9E%E7%94%9F-2024-03-26/</link><guid isPermaLink="true">https://astro-blog-zozo.pages.dev/posts/%E4%B8%80%E4%B8%AA%E6%83%B3%E6%B3%95%E7%9A%84%E8%AF%9E%E7%94%9F-2024-03-26/</guid><description>换手机的冲动，引发的思考</description><pubDate>Fri, 03 May 2024 15:13:12 GMT</pubDate><content:encoded>
+因为手机电池的健康度，就剩下不到60%了，最近一直在看手机。因为上一部手机是iqoo neo5，还是比较喜欢那个系统的，也是因为用了三年多了，都习惯了。手机绑定很多东西，换同一个品牌的手机也是很方便的。所以下一部手机肯定是选iqoo或者vivo系列。
+
+因为又要花出去几千元，一时很难拿出来这个预算。所以考虑很长时间，最近一直在看手机，想找到一个性价比极高的手机。先是看iqoo neo9。看了一些评测，觉得它屏幕差，所以比较犹豫不决，在京东上看到这个手机，也是比较划算的，官网2299才能拿下，我在京东凑起来卷，2143就能拿下。当时以为这个活动一直有，就考虑再三。准备回家买，回到家后，发现这个手机优惠没了，购买欲望都没了。
+
+后面准备冲高端机，比如vivo X100，iqoo 12，价格都在3500+。今天看到iqoo 12，3357就能拿下，当时在京东上已经下单购买了，不过是借未来的钱。在信用卡上花了3357，然后信用卡分期有2折优惠，所以直接分期了。看起来比较划算。后面想到，我已经有电脑分期了，每个月要还480，那个分期每月还254，加起来要700多了，感觉压力有点大，对于现在的我，压力确实大，我也想攒钱，后面也想学车，学费也很多。想的很多，我就把买的退了，然后联系客服取消了分期，因为分期没多长时间，取消分期是不用违约金的。
+
+我在路上想，我这个决定做的很艰难，考虑写个app，专门用来做这种难以抉择的事情，然后有凭证了，未来也很好去查询，也不会后悔，然后，后面开始设计，先做好规划，然后在付出实践，感觉这种app市场不大，就当来练手吧，不过要事先把框架搭出来，再动手，过往的经验告诉我，最后都是很乱的，我就是有点乱的。
+
+希望这个app早日出来，然后先上架谷歌商店，这是今年的目标。
+</content:encoded></item></channel></rss>
