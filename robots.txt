@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://astro-blog-zozo.pages.dev/sitemap-index.xml
+Sitemap: https://leewei0923.com/sitemap-index.xml
