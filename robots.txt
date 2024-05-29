@@ -1,4 +1,7 @@
 User-agent: *
 Allow: /
 
+Disallow: /_astro/
+Disallow: /fonts/
+
 Sitemap: https://leewei0923.com/sitemap-index.xml
